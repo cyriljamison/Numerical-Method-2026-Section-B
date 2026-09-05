@@ -1,0 +1,10 @@
+AI Assistant Used:
+
+1.	ChatGPT
+2.	Gemini
+
+
+
+Repository URL:
+
+https://github.com/genelowelle-roallos/numerical-methods-lab.git

@@ -1,0 +1,3 @@
+jeanchanelmagbanua-lab
+ChatGPT, Claude
+https://github.com/jeanchanelmagbanua-lab/numerical-methods-lab.git

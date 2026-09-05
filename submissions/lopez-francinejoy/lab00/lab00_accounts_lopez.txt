@@ -1,0 +1,9 @@
+Registered AI Assistant
+
+1. GEMINI
+2. COPILOT
+
+
+Repository URL
+
+https://github.com/francinejoy-lopez/numerical-methods-lab

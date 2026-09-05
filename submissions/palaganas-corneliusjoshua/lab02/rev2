@@ -1,0 +1,738 @@
+"""
+STRUCTURAL MODEL - 6m x 6m x 6m CUBE (Rev. 2)
+Enhanced with:
+- Pinned supports at bottom nodes (N0-N3)
+- DOF labels for each node (6 DOF per node)
+- MZ end releases on X-direction beams
+- Beta angles for members (90° for vertical members)
+- Global and local axes visualization
+- Model data displayed as text on the side
+- Comprehensive Excel output
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import os
+from math import atan2, degrees, sqrt, radians, cos, sin
+
+class StructuralModel:
+    def __init__(self):
+        self.nodes = []
+        self.members = []
+        self.supports = {}
+        self.releases = {}
+        self.beta_angles = {}
+        self.dof = {}
+        self.node_labels = {}
+        self.dof_labels = {}
+        
+    def create_cube(self):
+        """Create a 6m x 6m x 6m cube with all structural properties"""
+        
+        # Define nodes (X, Y, Z) where Y is vertical
+        # Nodes 1-4 are pinned (1-based indexing in the diagram)
+        self.nodes = [
+            [0, 0, 0],     # Node 0 (Node 1 in 1-based) - bottom-front-left - Pinned
+            [6, 0, 0],     # Node 1 (Node 2 in 1-based) - bottom-front-right - Pinned
+            [6, 0, 6],     # Node 2 (Node 3 in 1-based) - bottom-back-right - Pinned
+            [0, 0, 6],     # Node 3 (Node 4 in 1-based) - bottom-back-left - Pinned
+            [0, 6, 0],     # Node 4 (Node 5 in 1-based) - top-front-left
+            [6, 6, 0],     # Node 5 (Node 6 in 1-based) - top-front-right
+            [6, 6, 6],     # Node 6 (Node 7 in 1-based) - top-back-right
+            [0, 6, 6]      # Node 7 (Node 8 in 1-based) - top-back-left
+        ]
+        
+        # Member incidences: [start_node, end_node]
+        # Using 0-based indexing internally, but display as 1-based
+        self.members = [
+            [0, 1],  # M0 (M1 in 1-based) - Bottom-front (X-direction) - Released
+            [1, 2],  # M1 (M2 in 1-based) - Bottom-right (Z-direction)
+            [2, 3],  # M2 (M3 in 1-based) - Bottom-back (X-direction) - Released
+            [3, 0],  # M3 (M4 in 1-based) - Bottom-left (Z-direction)
+            [4, 5],  # M4 (M5 in 1-based) - Top-front (X-direction) - Released
+            [5, 6],  # M5 (M6 in 1-based) - Top-right (Z-direction)
+            [6, 7],  # M6 (M7 in 1-based) - Top-back (X-direction) - Released
+            [7, 4],  # M7 (M8 in 1-based) - Top-left (Z-direction)
+            [0, 4],  # M8 (M9 in 1-based) - Front-left vertical (Column) - Beta=90°
+            [1, 5],  # M9 (M10 in 1-based) - Front-right vertical (Column) - Beta=90°
+            [2, 6],  # M10 (M11 in 1-based) - Back-right vertical (Column) - Beta=90°
+            [3, 7]   # M11 (M12 in 1-based) - Back-left vertical (Column) - Beta=90°
+        ]
+        
+        # Define pinned supports at bottom nodes (Nodes 1-4 in 1-based = 0-3 in 0-based)
+        # Pinned: Restrain X, Y, Z translations
+        self.supports = {
+            0: {'type': 'Pinned', 'restraints': ['UX', 'UY', 'UZ']},
+            1: {'type': 'Pinned', 'restraints': ['UX', 'UY', 'UZ']},
+            2: {'type': 'Pinned', 'restraints': ['UX', 'UY', 'UZ']},
+            3: {'type': 'Pinned', 'restraints': ['UX', 'UY', 'UZ']}
+        }
+        
+        # Define beam releases (MZ end releases on X-direction beams)
+        # Pinned members: 1, 3, 5, 7 (1-based) = 0, 2, 4, 6 (0-based)
+        # Pattern: Pinned i and j (both ends)
+        # Component: MZ (moment about local z)
+        self.releases = {
+            0: {'start': ['MZ'], 'end': ['MZ']},  # M1 - Bottom-front
+            2: {'start': ['MZ'], 'end': ['MZ']},  # M3 - Bottom-back
+            4: {'start': ['MZ'], 'end': ['MZ']},  # M5 - Top-front
+            6: {'start': ['MZ'], 'end': ['MZ']}   # M7 - Top-back
+        }
+        
+        # Define Beta angles
+        # Base Beam: 0°, Roof Beam: 0°, Column: 90°
+        for i in range(len(self.members)):
+            start_node = self.members[i][0]
+            end_node = self.members[i][1]
+            # Check if member is vertical (column)
+            if (self.nodes[start_node][0] == self.nodes[end_node][0] and 
+                self.nodes[start_node][2] == self.nodes[end_node][2]):
+                self.beta_angles[i] = 90.0  # Column
+            else:
+                self.beta_angles[i] = 0.0   # Beam
+        
+        # Calculate DOF for each node
+        self.calculate_dof()
+        
+        # Generate DOF labels
+        self.generate_dof_labels()
+        
+    def calculate_dof(self):
+        """Calculate degrees of freedom for each node"""
+        for i, node in enumerate(self.nodes):
+            if i in self.supports:
+                # Pinned support: only translations are restrained
+                # DOF: UX, UY, UZ are fixed; RX, RY, RZ are free
+                self.dof[i] = {
+                    'UX': 'Fixed', 'UY': 'Fixed', 'UZ': 'Fixed',
+                    'RX': 'Free', 'RY': 'Free', 'RZ': 'Free'
+                }
+            else:
+                # Free node: all DOF are free
+                self.dof[i] = {
+                    'UX': 'Free', 'UY': 'Free', 'UZ': 'Free',
+                    'RX': 'Free', 'RY': 'Free', 'RZ': 'Free'
+                }
+    
+    def generate_dof_labels(self):
+        """Generate DOF labels for each node (1-based numbering for DOF)"""
+        # DOF per node: 6, Total DOF: 48
+        # Numbering: (node - 1) x 6 + 1..6
+        for i in range(len(self.nodes)):
+            base = i * 6
+            self.dof_labels[i] = {
+                'UX': base + 1,
+                'UY': base + 2,
+                'UZ': base + 3,
+                'RX': base + 4,
+                'RY': base + 5,
+                'RZ': base + 6
+            }
+
+def create_excel_file(model):
+    """Create enhanced Excel file with all structural data"""
+    
+    # 1. Nodes DataFrame with DOF labels
+    node_data = []
+    for i, node in enumerate(model.nodes):
+        dof_status = model.dof[i]
+        dof_labels = model.dof_labels[i]
+        support_type = model.supports.get(i, {}).get('type', 'None')
+        node_data.append({
+            'Node (1-based)': i + 1,
+            'X (m)': node[0],
+            'Y (m)': node[1],
+            'Z (m)': node[2],
+            'Support': support_type,
+            'UX DOF': dof_labels['UX'],
+            'UY DOF': dof_labels['UY'],
+            'UZ DOF': dof_labels['UZ'],
+            'RX DOF': dof_labels['RX'],
+            'RY DOF': dof_labels['RY'],
+            'RZ DOF': dof_labels['RZ'],
+            'UX Status': dof_status['UX'],
+            'UY Status': dof_status['UY'],
+            'UZ Status': dof_status['UZ'],
+            'RX Status': dof_status['RX'],
+            'RY Status': dof_status['RY'],
+            'RZ Status': dof_status['RZ']
+        })
+    node_df = pd.DataFrame(node_data)
+    node_df.set_index('Node (1-based)', inplace=True)
+    
+    # 2. Members DataFrame
+    member_data = []
+    for i, member in enumerate(model.members):
+        releases = model.releases.get(i, {})
+        start_releases = ', '.join(releases.get('start', [])) if releases else 'None'
+        end_releases = ', '.join(releases.get('end', [])) if releases else 'None'
+        
+        # Calculate member length and orientation
+        start_node = model.nodes[member[0]]
+        end_node = model.nodes[member[1]]
+        length = sqrt(sum((end_node[j] - start_node[j])**2 for j in range(3)))
+        
+        # Determine member orientation
+        if start_node[0] == end_node[0] and start_node[2] == end_node[2]:
+            orientation = 'Column'
+        elif start_node[1] == end_node[1]:
+            orientation = 'Beam'
+        else:
+            orientation = 'Diagonal'
+        
+        member_data.append({
+            'Member (1-based)': i + 1,
+            'Start Node': member[0] + 1,
+            'End Node': member[1] + 1,
+            'Length (m)': round(length, 3),
+            'Beta Angle (°)': model.beta_angles[i],
+            'Orientation': orientation,
+            'Start Releases': start_releases,
+            'End Releases': end_releases
+        })
+    member_df = pd.DataFrame(member_data)
+    member_df.set_index('Member (1-based)', inplace=True)
+    
+    # 3. Support Summary DataFrame
+    support_data = []
+    for node, support in model.supports.items():
+        support_data.append({
+            'Node (1-based)': node + 1,
+            'Type': support['type'],
+            'Restrained': ', '.join(support['restraints']),
+            'Released': 'RX, RY, RZ'
+        })
+    support_df = pd.DataFrame(support_data)
+    support_df.set_index('Node (1-based)', inplace=True)
+    
+    # 4. DOF Summary DataFrame
+    dof_data = []
+    for node, dof in model.dof.items():
+        dof_labels = model.dof_labels[node]
+        dof_data.append({
+            'Node (1-based)': node + 1,
+            'UX (DOF)': dof_labels['UX'],
+            'UY (DOF)': dof_labels['UY'],
+            'UZ (DOF)': dof_labels['UZ'],
+            'RX (DOF)': dof_labels['RX'],
+            'RY (DOF)': dof_labels['RY'],
+            'RZ (DOF)': dof_labels['RZ'],
+            'UX': dof['UX'],
+            'UY': dof['UY'],
+            'UZ': dof['UZ'],
+            'RX': dof['RX'],
+            'RY': dof['RY'],
+            'RZ': dof['RZ']
+        })
+    dof_df = pd.DataFrame(dof_data)
+    dof_df.set_index('Node (1-based)', inplace=True)
+    
+    # 5. Releases Summary
+    release_data = []
+    for member, releases in model.releases.items():
+        release_data.append({
+            'Member (1-based)': member + 1,
+            'Start Node': model.members[member][0] + 1,
+            'End Node': model.members[member][1] + 1,
+            'Pattern': 'Pinned i and j',
+            'Component': 'MZ',
+            'Released End DOF': 8,
+            'Member End DOF': 12
+        })
+    release_df = pd.DataFrame(release_data)
+    release_df.set_index('Member (1-based)', inplace=True)
+    
+    # Save to Excel
+    filename = 'cube_6m_PALAGANAS_Rev2.xlsx'
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        node_df.to_excel(writer, sheet_name='Nodes')
+        member_df.to_excel(writer, sheet_name='Members')
+        support_df.to_excel(writer, sheet_name='Supports')
+        dof_df.to_excel(writer, sheet_name='DOF_Summary')
+        release_df.to_excel(writer, sheet_name='Releases')
+        
+        # Add a summary sheet with model data
+        summary_data = {
+            'Property': [
+                'Cube edge', 'Nodes', 'Members',
+                'Global X', 'Global Y', 'Global Z',
+                'Support Type', 'Support Nodes', 'Restrained', 'Released',
+                'DOF per node', 'Total DOF', 'Restrained DOF', 'Active DOF',
+                'Numbering', 'Pinned members', 'Pattern', 'Component',
+                'Released end DOF', 'Member end DOF', 'Symbol',
+                'Base Beam Beta', 'Roof Beam Beta', 'Column Beta',
+                'local x', 'local y', 'local z',
+                'Vertical members'
+            ],
+            'Value': [
+                '6.0 m', '8', '12',
+                'lateral', 'vertical (up)', 'lateral',
+                'pinned', '1, 2, 3, 4', 'UX, UY, UZ', 'RX, RY, RZ',
+                '6', '48', '12', '36',
+                '(node - 1) x 6 + 1..6', '1, 3, 5, 7', 'Pinned i and j', 'MZ',
+                '8', '12 (12 per member)', 'hollow circle at the end',
+                '0 deg', '0 deg', '90 deg',
+                'start node i to end node j', 'in the vertical plane, upward',
+                'completes the right-handed set',
+                'local z parallel to global Z'
+            ]
+        }
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Model Data', index=False)
+    
+    file_path = os.path.abspath(filename)
+    print(f"\n✅ Excel file created: {filename}")
+    print(f"📁 Location: {file_path}")
+    return file_path
+
+def plot_structural_model(model):
+    """Enhanced 3D plot with model data displayed on the side"""
+    
+    fig = plt.figure(figsize=(20, 14))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Color scheme
+    colors = {
+        'beam': '#1f77b4',
+        'column': '#2ca02c',
+        'released': '#ff7f0e',
+        'nodes': '#d62728',
+        'supports': '#2ca02c',
+        'global_axes': '#000000',
+        'local_axes': '#9467bd'
+    }
+    
+    # Plot members
+    for idx, member in enumerate(model.members):
+        start = model.nodes[member[0]]
+        end = model.nodes[member[1]]
+        
+        # Check if member has releases (pinned ends)
+        has_release = idx in model.releases
+        
+        # Check if member is vertical (column)
+        is_vertical = (start[0] == end[0] and start[2] == end[2])
+        
+        # Determine line style and color
+        if is_vertical:
+            line_color = colors['column']
+            line_width = 3
+            linestyle = '-'
+        elif has_release:
+            line_color = colors['released']
+            line_width = 2.5
+            linestyle = '--'
+        else:
+            line_color = colors['beam']
+            line_width = 2
+            linestyle = '-'
+        
+        # Draw member line
+        ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]],
+               color=line_color, linewidth=line_width, linestyle=linestyle)
+        
+        # Draw pinned symbols at released ends (MZ release)
+        if has_release:
+            releases = model.releases[idx]
+            # Start node release
+            if 'MZ' in releases.get('start', []):
+                draw_pinned_symbol(ax, start, end, 'start')
+                # Add MZ label at start
+                offset = 0.3
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                dz = end[2] - start[2]
+                length = sqrt(dx**2 + dy**2 + dz**2)
+                if length > 0:
+                    x = start[0] + (dx/length) * offset
+                    y = start[1] + (dy/length) * offset + 0.3
+                    z = start[2] + (dz/length) * offset
+                    ax.text(x, y, z, '[MZ]', size=8, color='orange', weight='bold')
+            
+            # End node release
+            if 'MZ' in releases.get('end', []):
+                draw_pinned_symbol(ax, end, start, 'end')
+                # Add MZ label at end
+                offset = 0.3
+                dx = start[0] - end[0]
+                dy = start[1] - end[1]
+                dz = start[2] - end[2]
+                length = sqrt(dx**2 + dy**2 + dz**2)
+                if length > 0:
+                    x = end[0] + (dx/length) * offset
+                    y = end[1] + (dy/length) * offset + 0.3
+                    z = end[2] + (dz/length) * offset
+                    ax.text(x, y, z, '[MZ]', size=8, color='orange', weight='bold')
+        
+        # Add member label (1-based)
+        mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2]
+        # Offset label slightly for vertical members
+        if is_vertical:
+            mid[0] += 0.5
+            mid[2] += 0.5
+            # Add beta angle label for vertical members
+            ax.text(mid[0], mid[1], mid[2], f'M{idx+1} [β={model.beta_angles[idx]:.0f}°]', 
+                   size=9, color='black',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+        else:
+            # Check if member has release
+            if has_release:
+                ax.text(mid[0], mid[1], mid[2], f'M{idx+1} [MZ]', size=9, color='black',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+            else:
+                ax.text(mid[0], mid[1], mid[2], f'M{idx+1}', size=9, color='black',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+        
+        # Draw local axes for selected members
+        if idx in [0, 4, 8, 9]:  # Show local axes on some members
+            draw_local_axes(ax, start, end, model.beta_angles[idx])
+    
+    # Plot nodes and supports with DOF labels
+    for i, node in enumerate(model.nodes):
+        if i in model.supports:
+            # Pinned support - draw triangle symbol
+            draw_pinned_support(ax, node)
+            # Node label with DOF range (1-based)
+            dof_start = model.dof_labels[i]['UX']
+            dof_end = model.dof_labels[i]['RZ']
+            ax.text(node[0], node[1] - 0.7, node[2], 
+                   f'N{i+1} (Pinned)\nDOF {dof_start}-{dof_end}', 
+                   size=10, color='red', weight='bold',
+                   ha='center', va='top')
+        else:
+            ax.scatter(node[0], node[1], node[2], color=colors['nodes'], s=100)
+            # Node label with DOF range (1-based)
+            dof_start = model.dof_labels[i]['UX']
+            dof_end = model.dof_labels[i]['RZ']
+            ax.text(node[0], node[1] + 0.4, node[2], 
+                   f'N{i+1}\nDOF {dof_start}-{dof_end}', 
+                   size=10, color='black', weight='bold',
+                   ha='center', va='bottom')
+    
+    # Draw global axes
+    draw_global_axes(ax)
+    
+    # Set labels and title
+    ax.set_xlabel('X (Global) - m', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Y (Global Vertical) - m', fontsize=12, fontweight='bold')
+    ax.set_zlabel('Z (Global) - m', fontsize=12, fontweight='bold')
+    ax.set_title('6m x 6m x 6m Cube - Structural Model (Rev. 2)\n'
+                'Pinned Supports | MZ Beam Releases | Beta Angles | DOF Labels',
+                fontsize=14, fontweight='bold')
+    
+    # Set equal aspect ratio with some margin
+    max_range = 6
+    margin = 3
+    mid = [3, 3, 3]
+    ax.set_xlim(mid[0] - max_range/2 - margin, mid[0] + max_range/2 + margin)
+    ax.set_ylim(mid[1] - max_range/2 - margin, mid[1] + max_range/2 + margin)
+    ax.set_zlim(mid[2] - max_range/2 - margin, mid[2] + max_range/2 + margin)
+    
+    ax.grid(True, alpha=0.3)
+    
+    # Add model data as text on the side
+    model_data_text = get_model_data_text(model)
+    
+    # Position the text on the right side of the plot
+    # Using text2D for fixed position in figure coordinates
+    ax.text2D(0.75, 0.98, model_data_text, transform=ax.transAxes,
+             fontsize=9, verticalalignment='top',
+             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
+                      edgecolor='black', alpha=0.95),
+             family='monospace')
+    
+    # Add legend in the upper left
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=colors['beam'], edgecolor=colors['beam'], 
+              label='Beam'),
+        Patch(facecolor=colors['released'], edgecolor=colors['released'],
+              label='Pinned member end (MZ released)'),
+        Patch(facecolor=colors['column'], edgecolor=colors['column'],
+              label='Column'),
+        Patch(facecolor=colors['supports'], edgecolor=colors['supports'],
+              label='Supported node (pinned)'),
+        Patch(facecolor=colors['nodes'], edgecolor=colors['nodes'],
+              label='Free node'),
+        Patch(facecolor=colors['local_axes'], edgecolor=colors['local_axes'],
+              label='Local axes')
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
+    
+    plt.tight_layout()
+    plt.show()
+
+def get_model_data_text(model):
+    """Generate the model data text for display on the side"""
+    
+    # Calculate DOF statistics
+    total_dof = len(model.nodes) * 6
+    restrained_dof = len(model.supports) * 3  # UX, UY, UZ for each pinned support
+    active_dof = total_dof - restrained_dof
+    
+    # Get pinned member numbers (1-based)
+    pinned_members = sorted([m + 1 for m in model.releases.keys()])
+    
+    text = "MODEL DATA - REV. 2\n"
+    text += "="*40 + "\n\n"
+    
+    text += "Geometry\n"
+    text += "    Cube edge    6.0 m\n"
+    text += f"    Nodes        {len(model.nodes)}\n"
+    text += f"    Members      {len(model.members)}\n\n"
+    
+    text += "Global axes\n"
+    text += "    X    lateral\n"
+    text += "    Y    vertical (up)\n"
+    text += "    Z    lateral\n\n"
+    
+    text += "Supports\n"
+    text += "    Type    pinned\n"
+    text += "    Nodes    1, 2, 3, 4\n"
+    text += "    Restrained    UX, UY, UZ\n"
+    text += "    Released    RX, RY, RZ\n\n"
+    
+    text += "Nodal degrees of freedom\n"
+    text += "    DOF per node    6\n"
+    text += f"    Total DOF      {total_dof}\n"
+    text += f"    Restrained DOF {restrained_dof}\n"
+    text += f"    Active DOF     {active_dof}\n"
+    text += "    Numbering    (node - 1) x 6 + 1..6\n\n"
+    
+    text += "Member end releases\n"
+    text += f"    Pinned members    {', '.join(map(str, pinned_members))}\n"
+    text += "    Pattern    Pinned i and j\n"
+    text += "    Component    MZ, moment about local z\n"
+    text += "    Released end DOF    8\n"
+    text += "    Member end DOF    144 (12 per member)\n"
+    text += "    Symbol    hollow circle at the end\n\n"
+    
+    text += "Beta angles\n"
+    text += "    Base Beam    0 deg\n"
+    text += "    Roof Beam    0 deg\n"
+    text += "    Column    90 deg\n\n"
+    
+    text += "Local axes\n"
+    text += "    local x    start node i to end node j\n"
+    text += "    local y    in the vertical plane, upward\n"
+    text += "    local z    completes the right-handed set\n"
+    text += "    Vertical members follow the limiting\n"
+    text += "    case: local z parallel to global Z."
+    
+    return text
+
+def draw_pinned_support(ax, node):
+    """Draw a pinned support symbol (triangle) at a node"""
+    size = 0.4
+    x, y, z = node
+    # Draw triangle in the XY plane
+    triangle = np.array([
+        [x, y - size, z],
+        [x - size/2, y, z],
+        [x + size/2, y, z]
+    ])
+    ax.plot_trisurf(triangle[:, 0], triangle[:, 1], triangle[:, 2],
+                   color='green', alpha=0.6)
+    # Add a small circle at the vertex
+    ax.scatter(x, y - size, z, color='darkgreen', s=30)
+
+def draw_pinned_symbol(ax, node, adjacent_node, position):
+    """Draw a circle symbol for pinned/released end"""
+    # Direction vector from node to adjacent node
+    dx = adjacent_node[0] - node[0]
+    dy = adjacent_node[1] - node[1]
+    dz = adjacent_node[2] - node[2]
+    length = sqrt(dx**2 + dy**2 + dz**2)
+    
+    if length == 0:
+        return
+    
+    # Normalize and offset from node
+    offset = 0.4
+    x = node[0] + (dx/length) * offset
+    y = node[1] + (dy/length) * offset
+    z = node[2] + (dz/length) * offset
+    
+    # Draw a small circle (pinned symbol)
+    u = np.linspace(0, 2 * np.pi, 20)
+    v = np.linspace(0, np.pi, 20)
+    r = 0.2
+    x_circle = x + r * np.outer(np.cos(u), np.sin(v))
+    y_circle = y + r * np.outer(np.sin(u), np.sin(v))
+    z_circle = z + r * np.outer(np.ones(np.size(u)), np.cos(v))
+    ax.plot_surface(x_circle, y_circle, z_circle, color='orange', alpha=0.8)
+
+def draw_local_axes(ax, start, end, beta_angle):
+    """Draw local axes for a member"""
+    # Calculate member direction vector
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    dz = end[2] - start[2]
+    length = sqrt(dx**2 + dy**2 + dz**2)
+    
+    if length == 0:
+        return
+    
+    # Midpoint of member
+    mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2]
+    
+    # Local x-axis (along member)
+    lx = [dx/length, dy/length, dz/length]
+    
+    # Local y-axis (perpendicular to x, in global vertical plane)
+    # Use global Y as reference for vertical
+    global_y = [0, 1, 0]
+    # Cross product of global_y and lx gives lz
+    lz = np.cross(global_y, lx)
+    if np.linalg.norm(lz) < 0.001:
+        # If member is vertical, use global Z as reference
+        global_z = [0, 0, 1]
+        lz = np.cross(global_z, lx)
+    lz = lz / np.linalg.norm(lz)
+    
+    # Local y-axis = lz x lx
+    ly = np.cross(lz, lx)
+    ly = ly / np.linalg.norm(ly)
+    
+    # Apply beta angle rotation (about lx)
+    beta_rad = np.radians(beta_angle)
+    # Rotate ly and lz about lx by beta_angle
+    ly_rot = ly * np.cos(beta_rad) + np.cross(lx, ly) * np.sin(beta_rad)
+    lz_rot = lz * np.cos(beta_rad) + np.cross(lx, lz) * np.sin(beta_rad)
+    
+    # Scale for visualization
+    scale = 0.6
+    
+    # Draw local axes
+    # x-axis (red)
+    ax.quiver(mid[0], mid[1], mid[2], 
+             lx[0]*scale, lx[1]*scale, lx[2]*scale,
+             color='red', linewidth=2.5, arrow_length_ratio=0.2)
+    ax.text(mid[0] + lx[0]*scale*1.1, mid[1] + lx[1]*scale*1.1, 
+            mid[2] + lx[2]*scale*1.1, 'x', color='red', fontsize=8, weight='bold')
+    
+    # y-axis (green)
+    ax.quiver(mid[0], mid[1], mid[2],
+             ly_rot[0]*scale, ly_rot[1]*scale, ly_rot[2]*scale,
+             color='green', linewidth=2.5, arrow_length_ratio=0.2)
+    ax.text(mid[0] + ly_rot[0]*scale*1.1, mid[1] + ly_rot[1]*scale*1.1, 
+            mid[2] + ly_rot[2]*scale*1.1, 'y', color='green', fontsize=8, weight='bold')
+    
+    # z-axis (blue)
+    ax.quiver(mid[0], mid[1], mid[2],
+             lz_rot[0]*scale, lz_rot[1]*scale, lz_rot[2]*scale,
+             color='blue', linewidth=2.5, arrow_length_ratio=0.2)
+    ax.text(mid[0] + lz_rot[0]*scale*1.1, mid[1] + lz_rot[1]*scale*1.1, 
+            mid[2] + lz_rot[2]*scale*1.1, 'z', color='blue', fontsize=8, weight='bold')
+
+def draw_global_axes(ax):
+    """Draw global axes at origin"""
+    # Global axes at origin
+    origin = [0, 0, 0]
+    axis_length = 2.0
+    
+    # X-axis (red)
+    ax.quiver(origin[0], origin[1], origin[2], 
+             axis_length, 0, 0,
+             color='red', linewidth=3, arrow_length_ratio=0.15)
+    ax.text(axis_length + 0.3, 0, 0, 'Global X', color='red', 
+           fontsize=10, weight='bold')
+    
+    # Y-axis (green) - vertical
+    ax.quiver(origin[0], origin[1], origin[2],
+             0, axis_length, 0,
+             color='green', linewidth=3, arrow_length_ratio=0.15)
+    ax.text(0, axis_length + 0.3, 0, 'Global Y', color='green', 
+           fontsize=10, weight='bold')
+    
+    # Z-axis (blue)
+    ax.quiver(origin[0], origin[1], origin[2],
+             0, 0, axis_length,
+             color='blue', linewidth=3, arrow_length_ratio=0.15)
+    ax.text(0, 0, axis_length + 0.3, 'Global Z', color='blue', 
+           fontsize=10, weight='bold')
+
+def print_model_summary(model):
+    """Print detailed model summary"""
+    print("\n" + "="*80)
+    print("STRUCTURAL MODEL SUMMARY - 6m x 6m x 6m CUBE (Rev. 2)")
+    print("="*80)
+    
+    # Calculate DOF statistics
+    total_dof = len(model.nodes) * 6
+    restrained_dof = len(model.supports) * 3
+    active_dof = total_dof - restrained_dof
+    
+    print("\n📊 MODEL PROPERTIES:")
+    print(f"  • Cube Edge: 6.0 m")
+    print(f"  • Total Nodes: {len(model.nodes)}")
+    print(f"  • Total Members: {len(model.members)}")
+    print(f"  • DOF per Node: 6")
+    print(f"  • Total DOF: {total_dof}")
+    print(f"  • Restrained DOF: {restrained_dof}")
+    print(f"  • Active DOF: {active_dof}")
+    print(f"  • Pinned Supports: {len(model.supports)} (Nodes 1-4)")
+    print(f"  • Members with MZ Releases: {len(model.releases)}")
+    print(f"  • Release Type: Moment about Z-axis (MZ) at both ends")
+    
+    print("\n📋 NODE SUMMARY WITH DOF:")
+    print("  Node |  X (m)  |  Y (m)  |  Z (m)  | Support | DOF Range")
+    print("  " + "-"*70)
+    for i, node in enumerate(model.nodes):
+        support = "Pinned" if i in model.supports else "Free"
+        dof_start = model.dof_labels[i]['UX']
+        dof_end = model.dof_labels[i]['RZ']
+        print(f"  N{i+1:<2}  | {node[0]:6.1f}  | {node[1]:6.1f}  | {node[2]:6.1f}  | {support:6} | {dof_start:2} - {dof_end:2}")
+    
+    print("\n📐 MEMBER SUMMARY:")
+    print("  Member | Start | End | Length | Beta° | Orientation | Releases")
+    print("  " + "-"*80)
+    for i, member in enumerate(model.members):
+        start = member[0]
+        end = member[1]
+        start_node = model.nodes[start]
+        end_node = model.nodes[end]
+        length = sqrt(sum((end_node[j] - start_node[j])**2 for j in range(3)))
+        releases = model.releases.get(i, {})
+        start_rel = ', '.join(releases.get('start', ['None']))
+        end_rel = ', '.join(releases.get('end', ['None']))
+        
+        # Determine orientation
+        if start_node[0] == end_node[0] and start_node[2] == end_node[2]:
+            orient = 'Column'
+        elif start_node[1] == end_node[1]:
+            orient = 'Beam'
+        else:
+            orient = 'Diagonal'
+        
+        rel_str = f"S:{start_rel} E:{end_rel}" if start_rel != 'None' else 'Fixed'
+        print(f"  M{i+1:<2}  |  N{start+1}   |  N{end+1}  | {length:6.2f} | {model.beta_angles[i]:6.1f} | {orient:8} | {rel_str}")
+    
+    print("\n" + "="*80)
+
+# Main execution
+if __name__ == "__main__":
+    # Create model
+    model = StructuralModel()
+    model.create_cube()
+    
+    # Print summary
+    print_model_summary(model)
+    
+    # Create Excel file
+    excel_path = create_excel_file(model)
+    
+    # Plot the model
+    plot_structural_model(model)
+    
+    print("\n✅ Model creation complete!")
+    print(f"📊 Excel file: {os.path.basename(excel_path)}")
+    print("🔄 Model features:")
+    print("   • Pinned supports at nodes 1-4")
+    print("   • MZ end releases on X-direction beams (M1, M3, M5, M7)")
+    print("   • Beta = 90° for columns")
+    print("   • DOF labels for each node (1-48)")
+    print("   • Model data displayed on the side of the plot")
